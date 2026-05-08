@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>反向传播责任分配可视化</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a32;
+      --panel-soft: #1a2548;
+      --text: #e8ecff;
+      --muted: #9aa7d9;
+      --primary: #76a7ff;
+      --good: #47e4aa;
+      --red: #ff5a7d;
+      --blue: #4aa3ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at 30% 10%, #152244, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .app {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 16px;
+    }
+
+    .card {
+      background: linear-gradient(165deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+      border: 1px solid rgba(122, 150, 255, 0.2);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(4px);
+    }
+
+    .left {
+      padding: 12px;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 8px 8px 12px;
+      align-items: end;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    input[type="number"] {
+      width: 120px;
+      background: var(--panel-soft);
+      border: 1px solid rgba(160, 180, 255, 0.24);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 14px;
+    }
+
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 16px;
+      background: linear-gradient(135deg, #4f7bff, #6aa8ff);
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease, filter 0.15s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.08);
+    }
+
+    .note {
+      padding: 0 8px 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    svg {
+      width: 100%;
+      height: 520px;
+      display: block;
+      background: linear-gradient(180deg, rgba(31, 46, 89, 0.2), rgba(18, 26, 50, 0.45));
+      border-radius: 10px;
+      border: 1px solid rgba(140, 170, 255, 0.14);
+    }
+
+    .node {
+      fill: #dfe7ff;
+      stroke: #8ca9ff;
+      stroke-width: 2;
+    }
+
+    .node.hidden {
+      fill: #cceeff;
+    }
+
+    .node.output {
+      fill: #ffe2ec;
+      stroke: #ff83a0;
+    }
+
+    .node-label {
+      fill: #d7e0ff;
+      font-size: 13px;
+      text-anchor: middle;
+      dominant-baseline: middle;
+      pointer-events: none;
+      font-weight: 600;
+    }
+
+    .link-base {
+      stroke: rgba(145, 167, 235, 0.35);
+      stroke-width: 1.6;
+    }
+
+    .link-anim {
+      stroke-linecap: round;
+      stroke-dasharray: 8 7;
+      opacity: 0;
+      filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.2));
+    }
+
+    .delta-bubble {
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      pointer-events: none;
+    }
+
+    .delta-bubble circle {
+      fill: rgba(22, 32, 64, 0.95);
+      stroke: rgba(155, 186, 255, 0.9);
+      stroke-width: 1.6;
+      filter: drop-shadow(0 0 7px rgba(126, 166, 255, 0.45));
+    }
+
+    .delta-bubble text {
+      fill: #eef3ff;
+      font-size: 11px;
+      text-anchor: middle;
+      dominant-baseline: middle;
+      font-weight: 600;
+    }
+
+    .right {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 17px;
+      color: #eaf0ff;
+    }
+
+    .error-badge {
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 14px;
+      background: var(--panel-soft);
+      border: 1px solid rgba(142, 164, 255, 0.25);
+    }
+
+    .responsibility-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .responsibility-item {
+      background: rgba(24, 35, 70, 0.78);
+      border: 1px solid rgba(152, 176, 255, 0.22);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      background: rgba(23, 34, 65, 0.75);
+      border-radius: 10px;
+      border: 1px dashed rgba(139, 163, 240, 0.26);
+      padding: 10px;
+    }
+
+    @keyframes flowMove {
+      to {
+        stroke-dashoffset: -30;
+      }
+    }
+
+    @keyframes pulseGlow {
+      0%,
+      100% {
+        opacity: 0.25;
+      }
+      50% {
+        opacity: 1;
+      }
+    }
+
+    @media (max-width: 1024px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="card left">
+      <div class="controls">
+        <div class="field">
+          <label for="target">目标值 target</label>
+          <input id="target" type="number" value="1.0" step="0.1">
+        </div>
+        <div class="field">
+          <label for="prediction">当前预测 prediction</label>
+          <input id="prediction" type="number" value="0.35" step="0.1">
+        </div>
+        <button id="calcBtn">计算责任</button>
+      </div>
+      <div class="note">红色表示需要“往上修正”输出，蓝色表示需要“往下修正”输出。颜色越深、闪烁越明显 = 对误差贡献越大。</div>
+      <svg id="networkSvg" viewBox="0 0 760 520" aria-label="神经网络责任分配示意图"></svg>
+    </section>
+
+    <aside class="card right">
+      <h2 class="panel-title">责任分配说明</h2>
+      <div id="errorBadge" class="error-badge">等待计算...</div>
+      <ul id="responsibilityList" class="responsibility-list"></ul>
+      <div class="hint" id="hintText">点击“计算责任”后，将看到误差从输出层倒流到隐藏层、再倒流到输入侧的动画。</div>
+    </aside>
+  </div>
+
+  <script>
+    const svg = document.getElementById("networkSvg");
+    const targetInput = document.getElementById("target");
+    const predictionInput = document.getElementById("prediction");
+    const calcBtn = document.getElementById("calcBtn");
+    const listEl = document.getElementById("responsibilityList");
+    const errorBadge = document.getElementById("errorBadge");
+    const hintText = document.getElementById("hintText");
+
+    const inputNodes = [
+      { id: "I1", x: 110, y: 170, label: "I1", type: "input" },
+      { id: "I2", x: 110, y: 350, label: "I2", type: "input" }
+    ];
+
+    const hiddenNodes = [
+      { id: "A", x: 360, y: 120, label: "A", type: "hidden" },
+      { id: "B", x: 360, y: 260, label: "B", type: "hidden" },
+      { id: "C", x: 360, y: 400, label: "C", type: "hidden" }
+    ];
+
+    const outputNode = { id: "O", x: 630, y: 260, label: "O", type: "output" };
+
+    // 预设权重：用于计算“责任分配”的相对大小
+    const hiddenToOutWeights = {
+      A: 0.92,
+      B: -0.55,
+      C: 0.38
+    };
+
+    const inputToHiddenWeights = [
+      { from: "I1", to: "A", w: 0.8 },
+      { from: "I1", to: "B", w: -0.4 },
+      { from: "I1", to: "C", w: 0.3 },
+      { from: "I2", to: "A", w: -0.2 },
+      { from: "I2", to: "B", w: 0.9 },
+      { from: "I2", to: "C", w: -0.5 }
+    ];
+
+    let edgeElements = [];
+    let bubbleElements = {};
+
+    function createSvgEl(name, attrs) {
+      const el = document.createElementNS("http://www.w3.org/2000/svg", name);
+      Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, value));
+      return el;
+    }
+
+    function drawNetwork() {
+      svg.innerHTML = "";
+      edgeElements = [];
+      bubbleElements = {};
+
+      const allNodes = [...inputNodes, ...hiddenNodes, outputNode];
+      const nodeMap = Object.fromEntries(allNodes.map((n) => [n.id, n]));
+
+      const allEdges = [];
+      inputToHiddenWeights.forEach((edge) => allEdges.push({ ...edge, stage: "ih" }));
+      hiddenNodes.forEach((h) => {
+        allEdges.push({ from: h.id, to: "O", w: hiddenToOutWeights[h.id], stage: "ho" });
+      });
+
+      allEdges.forEach((edge) => {
+        const start = nodeMap[edge.from];
+        const end = nodeMap[edge.to];
+        const base = createSvgEl("line", {
+          x1: start.x,
+          y1: start.y,
+          x2: end.x,
+          y2: end.y,
+          class: "link-base"
+        });
+        svg.appendChild(base);
+
+        const anim = createSvgEl("line", {
+          x1: start.x,
+          y1: start.y,
+          x2: end.x,
+          y2: end.y,
+          class: "link-anim"
+        });
+        svg.appendChild(anim);
+        edgeElements.push({
+          ...edge,
+          el: anim,
+          x1: String(start.x),
+          y1: String(start.y),
+          x2: String(end.x),
+          y2: String(end.y)
+        });
+      });
+
+      allNodes.forEach((node) => {
+        const cls = node.type === "hidden" ? "node hidden" : node.type === "output" ? "node output" : "node";
+        const circle = createSvgEl("circle", {
+          cx: node.x,
+          cy: node.y,
+          r: 28,
+          class: cls
+        });
+        svg.appendChild(circle);
+
+        const text = createSvgEl("text", {
+          x: node.x,
+          y: node.y,
+          class: "node-label"
+        });
+        text.textContent = node.label;
+        svg.appendChild(text);
+      });
+
+      [...hiddenNodes, outputNode].forEach((node) => {
+        const group = createSvgEl("g", {
+          class: "delta-bubble"
+        });
+        const bubbleCircle = createSvgEl("circle", {
+          cx: node.x + 58,
+          cy: node.y - 46,
+          r: 14
+        });
+        const bubbleText = createSvgEl("text", {
+          x: node.x + 58,
+          y: node.y - 46
+        });
+        bubbleText.textContent = "d=0";
+        group.appendChild(bubbleCircle);
+        group.appendChild(bubbleText);
+        svg.appendChild(group);
+        bubbleElements[node.id] = {
+          group,
+          circle: bubbleCircle,
+          text: bubbleText
+        };
+      });
+    }
+
+    function norm(value, maxAbs) {
+      if (maxAbs === 0) {
+        return 0;
+      }
+      return Math.abs(value) / maxAbs;
+    }
+
+    function colorBySign(value) {
+      return value >= 0 ? "var(--red)" : "var(--blue)";
+    }
+
+    function animateEdge(edge, contribution, delayMs, reverseFlow) {
+      const strength = contribution;
+      const width = 2 + strength * 7;
+      const alpha = 0.18 + strength * 0.82;
+      const duration = 2.4 - strength * 1.1;
+      const glow = 2 + strength * 9;
+
+      edge.el.style.stroke = colorBySign(edge.w);
+      edge.el.style.strokeWidth = String(width);
+      edge.el.style.opacity = String(alpha);
+      edge.el.style.filter = `drop-shadow(0 0 ${glow}px ${colorBySign(edge.w)})`;
+      edge.el.style.animation = "none";
+
+      edge.el.setAttribute("x1", reverseFlow ? edge.x2 : edge.x1);
+      edge.el.setAttribute("y1", reverseFlow ? edge.y2 : edge.y1);
+      edge.el.setAttribute("x2", reverseFlow ? edge.x1 : edge.x2);
+      edge.el.setAttribute("y2", reverseFlow ? edge.y1 : edge.y2);
+
+      setTimeout(() => {
+        edge.el.style.animation = `flowMove ${duration.toFixed(2)}s linear infinite, pulseGlow ${Math.max(0.35, duration * 0.6).toFixed(2)}s ease-in-out infinite`;
+      }, delayMs);
+    }
+
+    function resetAnimations() {
+      edgeElements.forEach((edge) => {
+        edge.el.style.animation = "none";
+        edge.el.style.opacity = "0";
+        edge.el.style.strokeWidth = "2";
+        edge.el.style.filter = "drop-shadow(0 0 2px rgba(255,255,255,0.2))";
+      });
+
+      Object.values(bubbleElements).forEach((bubble) => {
+        bubble.group.style.opacity = "0";
+        bubble.circle.setAttribute("r", "14");
+        bubble.text.textContent = "d=0";
+      });
+    }
+
+    function showDeltaBubble(nodeId, delta, maxAbs, delayMs) {
+      const bubble = bubbleElements[nodeId];
+      if (!bubble) {
+        return;
+      }
+      const intensity = norm(delta, maxAbs);
+      const radius = 13 + intensity * 17;
+      const sign = delta >= 0 ? "+" : "";
+      const strokeColor = delta >= 0 ? "rgba(255,120,150,0.95)" : "rgba(96,173,255,0.95)";
+      const glowColor = delta >= 0 ? "rgba(255,110,145,0.7)" : "rgba(89,168,255,0.7)";
+
+      setTimeout(() => {
+        bubble.circle.setAttribute("r", radius.toFixed(2));
+        bubble.circle.style.stroke = strokeColor;
+        bubble.circle.style.filter = `drop-shadow(0 0 ${Math.round(8 + intensity * 10)}px ${glowColor})`;
+        bubble.text.textContent = `δ=${sign}${delta.toFixed(3)}`;
+        bubble.group.style.opacity = "1";
+      }, delayMs);
+    }
+
+    function runBackprop() {
+      const target = Number(targetInput.value);
+      const prediction = Number(predictionInput.value);
+
+      if (!Number.isFinite(target) || !Number.isFinite(prediction)) {
+        errorBadge.textContent = "请输入有效数字。";
+        return;
+      }
+
+      resetAnimations();
+
+      const error = target - prediction;
+      const outDelta = error; // 简化：输出层梯度近似为误差
+
+      const hiddenDeltas = hiddenNodes.map((h) => {
+        const w = hiddenToOutWeights[h.id];
+        return { id: h.id, w, delta: outDelta * w };
+      });
+
+      const maxHiddenDelta = Math.max(...hiddenDeltas.map((d) => Math.abs(d.delta)), 1e-6);
+      const maxIHWeight = Math.max(...inputToHiddenWeights.map((e) => Math.abs(e.w)), 1e-6);
+      const maxNodeDelta = Math.max(Math.abs(outDelta), maxHiddenDelta, 1e-6);
+
+      const outEdges = edgeElements.filter((e) => e.stage === "ho");
+      const inEdges = edgeElements.filter((e) => e.stage === "ih");
+
+      outEdges.forEach((edge, idx) => {
+        const hiddenDelta = hiddenDeltas.find((h) => h.id === edge.from);
+        const contribution = norm(hiddenDelta.delta, maxHiddenDelta);
+        animateEdge(edge, contribution, idx * 220, true);
+      });
+
+      inEdges.forEach((edge, idx) => {
+        const hiddenDelta = hiddenDeltas.find((h) => h.id === edge.to);
+        const combined = Math.abs(hiddenDelta.delta) * norm(edge.w, maxIHWeight);
+        const contribution = Math.min(1, combined / (Math.abs(outDelta) + 1e-6));
+        animateEdge(edge, contribution, 900 + idx * 130, true);
+      });
+
+      // 输出层的涟漪先出现，因此它的 delta 气泡最先亮起
+      showDeltaBubble("O", outDelta, maxNodeDelta, 80);
+      hiddenDeltas.forEach((item, idx) => {
+        // 当输出层->隐藏层的回传波到达该隐藏神经元时展示其 delta
+        showDeltaBubble(item.id, item.delta, maxNodeDelta, 260 + idx * 220);
+      });
+
+      errorBadge.innerHTML = `误差 e = target - prediction = <strong>${error.toFixed(3)}</strong>（${error >= 0 ? "预测偏低，整体要往上推" : "预测偏高，整体要往下拉"}）`;
+
+      const sorted = [...hiddenDeltas].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+      listEl.innerHTML = "";
+      sorted.forEach((item, rank) => {
+        const intensity = norm(item.delta, maxHiddenDelta);
+        const li = document.createElement("li");
+        li.className = "responsibility-item";
+        li.innerHTML = `隐藏层神经元 <strong>${item.id}</strong> 接收修正建议：<strong>${item.delta.toFixed(3)}</strong><br>
+          影响等级：${rank + 1} / 3，贡献强度 ${(intensity * 100).toFixed(1)}%（权重 ${item.w >= 0 ? "+" : ""}${item.w.toFixed(2)}）`;
+        listEl.appendChild(li);
+      });
+
+      hintText.textContent = "现在看到的是“谁该为误差负责更多”这一层级：输出误差先分配给 A/B/C，再由 A/B/C 继续分配回输入侧连接。";
+    }
+
+    drawNetwork();
+    calcBtn.addEventListener("click", runBackprop);
+    runBackprop();
+  </script>
+</body>
+</html>

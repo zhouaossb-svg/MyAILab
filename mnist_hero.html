@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MNIST 手写数字识别（TensorFlow.js）</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.19.0/dist/tf.min.js"></script>
+  <style>
+    :root {
+      --bg: #0d1326;
+      --panel: #151f3d;
+      --text: #eef3ff;
+      --muted: #9fb0df;
+      --primary: #74a6ff;
+      --ok: #41d6a4;
+      --warn: #ffb347;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at 20% 10%, #1a2a57, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .app {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .card {
+      background: linear-gradient(170deg, rgba(255,255,255,.04), rgba(255,255,255,.01));
+      border: 1px solid rgba(130, 160, 255, .25);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, .25);
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 20px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    button {
+      border: none;
+      background: linear-gradient(135deg, #4e7eff, #6bb0ff);
+      color: white;
+      padding: 9px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:disabled {
+      opacity: .6;
+      cursor: not-allowed;
+    }
+
+    #drawCanvas {
+      width: 280px;
+      height: 280px;
+      border: 1px solid rgba(170, 190, 255, .35);
+      border-radius: 10px;
+      background: black;
+      image-rendering: pixelated;
+      touch-action: none;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    .status {
+      font-size: 14px;
+      color: var(--muted);
+      margin-top: 8px;
+      line-height: 1.55;
+    }
+
+    .bar-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-top: 8px;
+    }
+
+    .bar-item {
+      display: grid;
+      grid-template-columns: 18px 1fr 70px;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+    }
+
+    .bar-track {
+      height: 16px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.12);
+    }
+
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #69a2ff, #45e0b2);
+      transition: width .08s linear;
+    }
+
+    #topGuess {
+      margin: 8px 0 4px;
+      font-size: 18px;
+      color: var(--ok);
+      font-weight: 700;
+    }
+
+    #progressChart {
+      width: 100%;
+      height: 220px;
+      border-radius: 10px;
+      border: 1px solid rgba(145, 170, 255, .25);
+      background: rgba(9, 14, 30, .6);
+      margin-top: 10px;
+    }
+
+    .neuron-panel {
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid rgba(145, 170, 255, .25);
+      border-radius: 10px;
+      background: rgba(9, 14, 30, .45);
+    }
+
+    .neuron-title {
+      font-size: 13px;
+      color: var(--muted);
+      margin: 6px 0 4px;
+    }
+
+    .neuron-canvas {
+      width: 100%;
+      height: 150px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, .14);
+      background: rgba(2, 6, 18, .8);
+      display: block;
+    }
+
+    .hide {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="card">
+      <h2>手写输入区</h2>
+      <div class="row">
+        <button id="trainBtn">开始训练</button>
+        <button id="clearBtn">清空画布</button>
+      </div>
+      <canvas id="drawCanvas" width="280" height="280"></canvas>
+      <div class="hint">请在左侧黑色区域用鼠标（或触控）写 0~9，右侧会实时显示概率分布。</div>
+      <div id="trainStatus" class="status">模型状态：未训练（可先点击“开始训练”）</div>
+      <canvas id="progressChart" width="520" height="220"></canvas>
+    </section>
+
+    <section class="card">
+      <h2>模型猜测结果（实时）</h2>
+      <div class="row">
+        <button id="toggleNeuronBtn">查看神经元：关</button>
+      </div>
+      <div id="topGuess">当前猜测：-</div>
+      <div id="probBars" class="bar-list"></div>
+      <div class="status" id="metricText">
+        训练轮次：0<br />
+        当前损失：-<br />
+        训练准确率：-<br />
+        测试准确率：-
+      </div>
+      <div id="neuronPanel" class="neuron-panel hide">
+        <div class="neuron-title">隐藏层 1（128 个神经元）</div>
+        <canvas id="hidden1Canvas" class="neuron-canvas" width="520" height="150"></canvas>
+        <div class="neuron-title">隐藏层 2（64 个神经元）</div>
+        <canvas id="hidden2Canvas" class="neuron-canvas" width="520" height="150"></canvas>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // -------------------------------
+    // 1) 加载 MNIST 数据（来自 TensorFlow.js 官方示例）
+    // -------------------------------
+    const IMAGE_SIZE = 784;
+    const NUM_CLASSES = 10;
+    const NUM_DATASET_ELEMENTS = 65000;
+    const NUM_TRAIN_ELEMENTS = 55000;
+    const NUM_TEST_ELEMENTS = NUM_DATASET_ELEMENTS - NUM_TRAIN_ELEMENTS;
+
+    const MNIST_IMAGES_SPRITE_PATH =
+      "https://storage.googleapis.com/learnjs-data/model-builder/mnist_images.png";
+    const MNIST_LABELS_PATH =
+      "https://storage.googleapis.com/learnjs-data/model-builder/mnist_labels_uint8";
+
+    class MnistData {
+      constructor() {
+        this.shuffledTrainIndex = 0;
+        this.shuffledTestIndex = 0;
+      }
+
+      async load() {
+        const img = new Image();
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        const imgRequest = new Promise((resolve, reject) => {
+          img.crossOrigin = "";
+          img.onload = () => {
+            img.width = img.naturalWidth;
+            img.height = img.naturalHeight;
+            const datasetBytesBuffer =
+              new ArrayBuffer(NUM_DATASET_ELEMENTS * IMAGE_SIZE * 4);
+            const chunkSize = 5000;
+            canvas.width = img.width;
+            canvas.height = chunkSize;
+            for (let i = 0; i < NUM_DATASET_ELEMENTS / chunkSize; i++) {
+              const datasetBytesView = new Float32Array(
+                datasetBytesBuffer,
+                i * IMAGE_SIZE * chunkSize * 4,
+                IMAGE_SIZE * chunkSize
+              );
+              ctx.drawImage(
+                img,
+                0,
+                i * chunkSize,
+                img.width,
+                chunkSize,
+                0,
+                0,
+                img.width,
+                chunkSize
+              );
+              const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              for (let j = 0; j < imageData.data.length / 4; j++) {
+                // 只取灰度像素，归一化到 [0, 1]
+                datasetBytesView[j] = imageData.data[j * 4] / 255;
+              }
+            }
+            this.datasetImages = new Float32Array(datasetBytesBuffer);
+            resolve();
+          };
+          img.onerror = reject;
+          img.src = MNIST_IMAGES_SPRITE_PATH;
+        });
+
+        const labelsRequest = fetch(MNIST_LABELS_PATH);
+        const [, labelsResponse] = await Promise.all([imgRequest, labelsRequest]);
+        this.datasetLabels = new Uint8Array(await labelsResponse.arrayBuffer());
+
+        this.trainIndices = tf.util.createShuffledIndices(NUM_TRAIN_ELEMENTS);
+        this.testIndices = tf.util.createShuffledIndices(NUM_TEST_ELEMENTS);
+
+        this.trainImages = this.datasetImages.slice(0, IMAGE_SIZE * NUM_TRAIN_ELEMENTS);
+        this.testImages = this.datasetImages.slice(IMAGE_SIZE * NUM_TRAIN_ELEMENTS);
+        this.trainLabels = this.datasetLabels.slice(0, NUM_CLASSES * NUM_TRAIN_ELEMENTS);
+        this.testLabels = this.datasetLabels.slice(NUM_CLASSES * NUM_TRAIN_ELEMENTS);
+      }
+
+      nextTrainBatch(batchSize) {
+        return this.nextBatch(
+          batchSize,
+          [this.trainImages, this.trainLabels],
+          () => {
+            this.shuffledTrainIndex =
+              (this.shuffledTrainIndex + 1) % this.trainIndices.length;
+            return this.trainIndices[this.shuffledTrainIndex];
+          }
+        );
+      }
+
+      nextTestBatch(batchSize) {
+        return this.nextBatch(
+          batchSize,
+          [this.testImages, this.testLabels],
+          () => {
+            this.shuffledTestIndex =
+              (this.shuffledTestIndex + 1) % this.testIndices.length;
+            return this.testIndices[this.shuffledTestIndex];
+          }
+        );
+      }
+
+      nextBatch(batchSize, data, index) {
+        const batchImagesArray = new Float32Array(batchSize * IMAGE_SIZE);
+        const batchLabelsArray = new Uint8Array(batchSize * NUM_CLASSES);
+        for (let i = 0; i < batchSize; i++) {
+          const idx = index();
+          const image = data[0].slice(idx * IMAGE_SIZE, idx * IMAGE_SIZE + IMAGE_SIZE);
+          batchImagesArray.set(image, i * IMAGE_SIZE);
+          const label = data[1].slice(
+            idx * NUM_CLASSES,
+            idx * NUM_CLASSES + NUM_CLASSES
+          );
+          batchLabelsArray.set(label, i * NUM_CLASSES);
+        }
+
+        const xs = tf.tensor2d(batchImagesArray, [batchSize, IMAGE_SIZE]);
+        const labels = tf.tensor2d(batchLabelsArray, [batchSize, NUM_CLASSES]);
+        return { xs, labels };
+      }
+    }
+
+    // -------------------------------
+    // 2) 构建网络：784 -> 128 -> 64 -> 10
+    // -------------------------------
+    function createModel() {
+      const model = tf.sequential();
+
+      model.add(
+        tf.layers.dense({
+          inputShape: [IMAGE_SIZE], // 输入层：784（28x28）
+          units: 128,               // 隐藏层1
+          activation: "relu"
+        })
+      );
+
+      model.add(
+        tf.layers.dense({
+          units: 64,                // 隐藏层2
+          activation: "relu"
+        })
+      );
+
+      model.add(
+        tf.layers.dense({
+          units: NUM_CLASSES,       // 输出层：10 类
+          activation: "softmax"
+        })
+      );
+
+      model.compile({
+        optimizer: tf.train.adam(0.001),
+        loss: "categoricalCrossentropy",
+        metrics: ["accuracy"]
+      });
+
+      return model;
+    }
+
+    // -------------------------------
+    // 3) 绘图板 + 实时识别
+    // -------------------------------
+    const drawCanvas = document.getElementById("drawCanvas");
+    const drawCtx = drawCanvas.getContext("2d");
+    const trainBtn = document.getElementById("trainBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const toggleNeuronBtn = document.getElementById("toggleNeuronBtn");
+    const trainStatusEl = document.getElementById("trainStatus");
+    const metricTextEl = document.getElementById("metricText");
+    const topGuessEl = document.getElementById("topGuess");
+    const barsWrap = document.getElementById("probBars");
+    const progressCanvas = document.getElementById("progressChart");
+    const progressCtx = progressCanvas.getContext("2d");
+    const neuronPanel = document.getElementById("neuronPanel");
+    const hidden1Canvas = document.getElementById("hidden1Canvas");
+    const hidden2Canvas = document.getElementById("hidden2Canvas");
+    const hidden1Ctx = hidden1Canvas.getContext("2d");
+    const hidden2Ctx = hidden2Canvas.getContext("2d");
+
+    let model = null;
+    let data = null;
+    let isTraining = false;
+    let accHistory = [];
+    let epochHistory = [];
+    let showNeurons = false;
+
+    const barEls = [];
+    for (let i = 0; i < 10; i++) {
+      const row = document.createElement("div");
+      row.className = "bar-item";
+      row.innerHTML = `
+        <div>${i}</div>
+        <div class="bar-track"><div class="bar-fill" id="bar-${i}"></div></div>
+        <div id="txt-${i}">0.00%</div>
+      `;
+      barsWrap.appendChild(row);
+      barEls.push({
+        fill: row.querySelector(`#bar-${i}`),
+        txt: row.querySelector(`#txt-${i}`)
+      });
+    }
+
+    function initDrawBoard() {
+      drawCtx.fillStyle = "black";
+      drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+      drawCtx.lineJoin = "round";
+      drawCtx.lineCap = "round";
+      drawCtx.strokeStyle = "white";
+      drawCtx.lineWidth = 18;
+    }
+
+    let drawing = false;
+    let lastX = 0;
+    let lastY = 0;
+
+    function getPos(evt) {
+      const rect = drawCanvas.getBoundingClientRect();
+      const x = (evt.clientX ?? evt.touches?.[0]?.clientX ?? 0) - rect.left;
+      const y = (evt.clientY ?? evt.touches?.[0]?.clientY ?? 0) - rect.top;
+      return { x, y };
+    }
+
+    function startDraw(evt) {
+      drawing = true;
+      const pos = getPos(evt);
+      lastX = pos.x;
+      lastY = pos.y;
+    }
+
+    function moveDraw(evt) {
+      if (!drawing) return;
+      evt.preventDefault();
+      const pos = getPos(evt);
+      drawCtx.beginPath();
+      drawCtx.moveTo(lastX, lastY);
+      drawCtx.lineTo(pos.x, pos.y);
+      drawCtx.stroke();
+      lastX = pos.x;
+      lastY = pos.y;
+      predictFromCanvas(); // 实时推理
+    }
+
+    function endDraw() {
+      drawing = false;
+      predictFromCanvas();
+    }
+
+    // 把 280x280 画布缩放成 28x28，再转成模型输入
+    function getInputTensorFromCanvas() {
+      return tf.tidy(() => {
+        const tmp = document.createElement("canvas");
+        tmp.width = 28;
+        tmp.height = 28;
+        const tctx = tmp.getContext("2d");
+        tctx.drawImage(drawCanvas, 0, 0, 28, 28);
+        const imageData = tctx.getImageData(0, 0, 28, 28);
+        const pixels = new Float32Array(IMAGE_SIZE);
+        for (let i = 0; i < IMAGE_SIZE; i++) {
+          // 黑底白字：取亮度并归一化
+          pixels[i] = imageData.data[i * 4] / 255;
+        }
+        return tf.tensor2d(pixels, [1, IMAGE_SIZE]);
+      });
+    }
+
+    async function predictFromCanvas() {
+      if (!model) return;
+      const result = tf.tidy(() => {
+        const input = getInputTensorFromCanvas();
+        // ===== 前向传播（推理阶段）=====
+        // 这里我们把每一层的输出都拿出来，观察隐藏层神经元激活情况
+        const hidden1Tensor = model.layers[0].apply(input);
+        const hidden2Tensor = model.layers[1].apply(hidden1Tensor);
+        const outputTensor = model.layers[2].apply(hidden2Tensor);
+        const [outputKernel, outputBias] = model.layers[2].getWeights();
+        // logits = W·h + b（softmax 前的原始输出）
+        const logitsTensor = hidden2Tensor.matMul(outputKernel).add(outputBias);
+        return {
+          probs: Array.from(outputTensor.dataSync()),
+          logits: Array.from(logitsTensor.dataSync()),
+          hidden1: Array.from(hidden1Tensor.dataSync()),
+          hidden2: Array.from(hidden2Tensor.dataSync())
+        };
+      });
+
+      let bestIndex = 0;
+      let bestVal = result.probs[0];
+      for (let i = 0; i < 10; i++) {
+        if (result.probs[i] > bestVal) {
+          bestVal = result.probs[i];
+          bestIndex = i;
+        }
+        const pct = result.probs[i] * 100;
+        barEls[i].fill.style.width = `${pct.toFixed(2)}%`;
+        barEls[i].txt.textContent = `${pct.toFixed(2)}%`;
+      }
+      topGuessEl.textContent = `当前猜测：${bestIndex}（${(bestVal * 100).toFixed(2)}%）`;
+      renderNeuronActivations(result.hidden1, result.hidden2);
+
+      // 实时打印输出层 10 个神经元“原始数值”(logits)，用于观察相近类别竞争
+      console.log(
+        "[输出层 logits 0-9]",
+        result.logits.map((v, i) => `${i}:${v.toFixed(4)}`).join(" | ")
+      );
+      console.log(
+        "[输出层 概率 0-9]",
+        result.probs.map((v, i) => `${i}:${(v * 100).toFixed(2)}%`).join(" | ")
+      );
+    }
+
+    function clearCanvas() {
+      drawCtx.fillStyle = "black";
+      drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+      for (let i = 0; i < 10; i++) {
+        barEls[i].fill.style.width = "0%";
+        barEls[i].txt.textContent = "0.00%";
+      }
+      topGuessEl.textContent = "当前猜测：-";
+      clearNeuronView();
+    }
+
+    function drawNeuronLayer(ctx, canvas, activations, cols) {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "rgba(7, 13, 29, 0.95)";
+      ctx.fillRect(0, 0, w, h);
+
+      const rows = Math.ceil(activations.length / cols);
+      const cellW = w / cols;
+      const cellH = h / rows;
+      const r = Math.max(2, Math.min(cellW, cellH) * 0.28);
+
+      for (let i = 0; i < activations.length; i++) {
+        const row = Math.floor(i / cols);
+        const col = i % cols;
+        const x = col * cellW + cellW / 2;
+        const y = row * cellH + cellH / 2;
+        const a = Math.max(0, Math.min(1, activations[i]));
+
+        // 激活值越大，圆点越亮，模拟“神经元被点亮”
+        const alpha = 0.1 + a * 0.9;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(79, 193, 255, ${alpha.toFixed(4)})`;
+        ctx.fill();
+      }
+    }
+
+    function renderNeuronActivations(hidden1, hidden2) {
+      if (!showNeurons) return;
+      drawNeuronLayer(hidden1Ctx, hidden1Canvas, hidden1, 16);
+      drawNeuronLayer(hidden2Ctx, hidden2Canvas, hidden2, 16);
+    }
+
+    function clearNeuronView() {
+      hidden1Ctx.clearRect(0, 0, hidden1Canvas.width, hidden1Canvas.height);
+      hidden2Ctx.clearRect(0, 0, hidden2Canvas.width, hidden2Canvas.height);
+      hidden1Ctx.fillStyle = "rgba(7, 13, 29, 0.95)";
+      hidden2Ctx.fillStyle = "rgba(7, 13, 29, 0.95)";
+      hidden1Ctx.fillRect(0, 0, hidden1Canvas.width, hidden1Canvas.height);
+      hidden2Ctx.fillRect(0, 0, hidden2Canvas.width, hidden2Canvas.height);
+    }
+
+    // -------------------------------
+    // 4) 训练可视化（准确率曲线）
+    // -------------------------------
+    function drawProgressChart() {
+      const w = progressCanvas.width;
+      const h = progressCanvas.height;
+      progressCtx.clearRect(0, 0, w, h);
+      progressCtx.fillStyle = "#0a1022";
+      progressCtx.fillRect(0, 0, w, h);
+
+      // 画坐标网格
+      progressCtx.strokeStyle = "rgba(255,255,255,.12)";
+      progressCtx.lineWidth = 1;
+      for (let i = 0; i <= 5; i++) {
+        const y = 20 + ((h - 40) / 5) * i;
+        progressCtx.beginPath();
+        progressCtx.moveTo(40, y);
+        progressCtx.lineTo(w - 10, y);
+        progressCtx.stroke();
+      }
+
+      progressCtx.fillStyle = "#a6b8e7";
+      progressCtx.font = "12px sans-serif";
+      progressCtx.fillText("准确率(%)", 8, 14);
+
+      if (accHistory.length < 2) return;
+
+      progressCtx.strokeStyle = "#4dddb1";
+      progressCtx.lineWidth = 2;
+      progressCtx.beginPath();
+      for (let i = 0; i < accHistory.length; i++) {
+        const x = 40 + ((w - 60) * i) / (accHistory.length - 1);
+        const y = 20 + (h - 40) * (1 - accHistory[i] / 100);
+        if (i === 0) progressCtx.moveTo(x, y);
+        else progressCtx.lineTo(x, y);
+      }
+      progressCtx.stroke();
+
+      // 标注最后一个点
+      const last = accHistory.length - 1;
+      const x = 40 + ((w - 60) * last) / (accHistory.length - 1);
+      const y = 20 + (h - 40) * (1 - accHistory[last] / 100);
+      progressCtx.fillStyle = "#4dddb1";
+      progressCtx.beginPath();
+      progressCtx.arc(x, y, 4, 0, Math.PI * 2);
+      progressCtx.fill();
+      progressCtx.fillText(`${accHistory[last].toFixed(2)}%`, x - 28, y - 10);
+    }
+
+    // -------------------------------
+    // 5) 训练流程
+    // -------------------------------
+    async function trainModel() {
+      if (isTraining) return;
+      isTraining = true;
+      trainBtn.disabled = true;
+      trainStatusEl.textContent = "模型状态：正在加载 MNIST 数据...";
+
+      try {
+        if (!data) {
+          data = new MnistData();
+          await data.load();
+        }
+        if (!model) {
+          model = createModel();
+        }
+
+        trainStatusEl.textContent = "模型状态：训练中...";
+        accHistory = [];
+        epochHistory = [];
+        drawProgressChart();
+
+        const BATCH_SIZE = 256;
+        const TRAIN_BATCHES = 200;
+        const TEST_BATCH_SIZE = 1000;
+        const EPOCHS = 12;
+
+        const trainData = data.nextTrainBatch(TRAIN_BATCHES * BATCH_SIZE);
+        const testData = data.nextTestBatch(TEST_BATCH_SIZE);
+
+        // ===== 前向传播 + 反向传播（训练阶段）=====
+        // model.fit 内部每个 batch 都会执行：
+        // 1) 前向传播：输入 -> 各层 -> 输出概率
+        // 2) 计算损失：预测结果 vs 真实标签
+        // 3) 反向传播：根据损失对每层参数求梯度
+        // 4) 参数更新：优化器(Adam)根据梯度更新权重
+        await model.fit(trainData.xs, trainData.labels, {
+          batchSize: BATCH_SIZE,
+          validationData: [testData.xs, testData.labels],
+          epochs: EPOCHS,
+          shuffle: true,
+          callbacks: {
+            onEpochEnd: async (epoch, logs) => {
+              const trainAcc = logs.acc ?? logs.accuracy ?? 0;
+              const valAcc = logs.val_acc ?? logs.val_accuracy ?? 0;
+              const loss = logs.loss ?? 0;
+              const valLoss = logs.val_loss ?? 0;
+
+              const testEval = model.evaluate(testData.xs, testData.labels, {
+                batchSize: TEST_BATCH_SIZE
+              });
+              const testAccuracyTensor = Array.isArray(testEval) ? testEval[1] : testEval;
+              const testAccuracy = (await testAccuracyTensor.data())[0];
+              tf.dispose(testEval);
+
+              const epochNo = epoch + 1;
+              epochHistory.push(epochNo);
+              accHistory.push(testAccuracy * 100);
+              drawProgressChart();
+
+              metricTextEl.innerHTML = `
+                训练轮次：${epochNo}/${EPOCHS}<br />
+                当前损失：${loss.toFixed(4)}（验证损失：${valLoss.toFixed(4)}）<br />
+                训练准确率：${(trainAcc * 100).toFixed(2)}%（验证准确率：${(valAcc * 100).toFixed(2)}%）<br />
+                测试准确率：${(testAccuracy * 100).toFixed(2)}%
+              `;
+
+              trainStatusEl.textContent =
+                `模型状态：训练中（第 ${epochNo}/${EPOCHS} 轮）`;
+              await tf.nextFrame();
+            }
+          }
+        });
+
+        trainStatusEl.textContent = "模型状态：训练完成，可以在左侧开始写数字！";
+        predictFromCanvas();
+        tf.dispose([trainData.xs, trainData.labels, testData.xs, testData.labels]);
+      } catch (err) {
+        console.error(err);
+        trainStatusEl.textContent = "模型状态：训练失败，请查看控制台错误信息。";
+      } finally {
+        isTraining = false;
+        trainBtn.disabled = false;
+      }
+    }
+
+    // -------------------------------
+    // 6) 事件绑定与初始化
+    // -------------------------------
+    drawCanvas.addEventListener("mousedown", startDraw);
+    drawCanvas.addEventListener("mousemove", moveDraw);
+    window.addEventListener("mouseup", endDraw);
+
+    drawCanvas.addEventListener("touchstart", startDraw, { passive: false });
+    drawCanvas.addEventListener("touchmove", moveDraw, { passive: false });
+    window.addEventListener("touchend", endDraw, { passive: false });
+
+    trainBtn.addEventListener("click", trainModel);
+    clearBtn.addEventListener("click", clearCanvas);
+    toggleNeuronBtn.addEventListener("click", () => {
+      showNeurons = !showNeurons;
+      neuronPanel.classList.toggle("hide", !showNeurons);
+      toggleNeuronBtn.textContent = `查看神经元：${showNeurons ? "开" : "关"}`;
+      if (!showNeurons) {
+        clearNeuronView();
+      } else {
+        predictFromCanvas();
+      }
+    });
+
+    initDrawBoard();
+    drawProgressChart();
+    clearNeuronView();
+  </script>
+</body>
+</html>
